@@ -43,6 +43,11 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/scalar_group_by_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
+#include "sql/operator/sort_logical_operator.h"
+#include "sql/operator/sort_physical_operator.h"
+#include "sql/operator/limit_physical_operator.h"
+#include "sql/operator/vector_index_scan_physical_operator.h"
+#include "storage/index/ivfflat_index.h"
 
 using namespace std;
 
@@ -64,7 +69,24 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
     } break;
 
     case LogicalOperatorType::PROJECTION: {
-      return create_plan(static_cast<ProjectLogicalOperator &>(logical_operator), oper, session);
+      auto &proj_oper = static_cast<ProjectLogicalOperator &>(logical_operator);
+      unique_ptr<PhysicalOperator> child_phy_oper;
+      if (!proj_oper.children().empty()) {
+         RC rc = create(*proj_oper.children().front(), child_phy_oper, session);
+         if (OB_FAIL(rc)) return rc;
+      }
+      auto proj_phy = make_unique<ProjectPhysicalOperator>(std::move(proj_oper.expressions()));
+      if (child_phy_oper) proj_phy->add_child(std::move(child_phy_oper));
+      
+      // 物理树顶层：优雅地封底 Limit 截断算子
+      if (proj_oper.limit() >= 0) {
+         auto limit_phy = make_unique<LimitPhysicalOperator>(proj_oper.limit());
+         limit_phy->add_child(std::move(proj_phy));
+         oper = std::move(limit_phy);
+      } else {
+         oper = std::move(proj_phy);
+      }
+      return RC::SUCCESS;
     } break;
 
     case LogicalOperatorType::INSERT: {
@@ -85,6 +107,53 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
 
     case LogicalOperatorType::GROUP_BY: {
       return create_plan(static_cast<GroupByLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    // 新增 SORT 分发处理
+    case LogicalOperatorType::SORT: {
+      auto &sort_oper = static_cast<SortLogicalOperator &>(logical_operator);
+      bool use_vector_index = false;
+
+      // 优化器核心规则：探针拦截 "ORDER BY DISTANCE(a, b)" 且存在合法索引
+      if (sort_oper.order_by().size() == 1 && sort_oper.order_by()[0]->type() == ExprType::FUNCTION) {
+        FunctionExpr *func = static_cast<FunctionExpr*>(sort_oper.order_by()[0].get());
+        if (func->func_type() == FunctionExpr::FuncType::DISTANCE) {
+           Expression *arg0 = func->children()[0].get();
+           Expression *arg1 = func->children()[1].get();
+           FieldExpr *field_expr = nullptr;
+           ValueExpr *val_expr = nullptr;
+           if (arg0->type() == ExprType::FIELD && arg1->type() == ExprType::VALUE) {
+              field_expr = static_cast<FieldExpr*>(arg0); val_expr = static_cast<ValueExpr*>(arg1);
+           } else if (arg1->type() == ExprType::FIELD && arg0->type() == ExprType::VALUE) {
+              field_expr = static_cast<FieldExpr*>(arg1); val_expr = static_cast<ValueExpr*>(arg0);
+           }
+           
+           if (field_expr && val_expr) {
+              Table *table = const_cast<Table*>(field_expr->field().table());
+              IvfflatIndex *idx = table->find_vector_index(field_expr->field().field_name());
+              if (idx != nullptr) {
+                 int top_k = sort_oper.limit() > 0 ? sort_oper.limit() : 100;
+                 // 剪枝发生！直接生成 VectorIndexScan 覆盖整条子树（丢弃 TableGet）
+                 auto vec_scan = make_unique<VectorIndexScanPhysicalOperator>(table, idx, val_expr->get_value(), top_k);
+                 oper = std::move(vec_scan);
+                 use_vector_index = true;
+              }
+           }
+        }
+      }
+
+      if (!use_vector_index) { // 常规回退
+          vector<unique_ptr<LogicalOperator>> &child_opers = sort_oper.children();
+          unique_ptr<PhysicalOperator> child_phy_oper;
+          if (!child_opers.empty()) {
+            RC rc = create(*child_opers.front(), child_phy_oper, session);
+            if (OB_FAIL(rc)) return rc;
+          }
+          auto sort_operator = make_unique<SortPhysicalOperator>(std::move(sort_oper.order_by()));
+          if (child_phy_oper) sort_operator->add_child(std::move(child_phy_oper));
+          oper = std::move(sort_operator);
+      }
+      return RC::SUCCESS;
     } break;
 
     default: {

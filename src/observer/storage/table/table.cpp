@@ -34,12 +34,16 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/lsm_record_scanner.h"
 #include "storage/table/heap_table_engine.h"
 #include "storage/table/lsm_table_engine.h"
+#include "storage/index/ivfflat_index.h"
 
 Table::~Table()
 {
   if (lob_handler_ != nullptr) {
     delete lob_handler_;
     lob_handler_ = nullptr;
+  }
+  for (auto idx : vector_indexes_) {
+    delete idx;
   }
 }
 
@@ -172,9 +176,16 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   return rc;
 }
 
+// 拦截原有的 insert_record，实现增量同步
 RC Table::insert_record(Record &record)
 {
-  return engine_->insert_record(record);
+  RC rc = engine_->insert_record(record);
+  if (rc == RC::SUCCESS) {
+     for (auto idx : vector_indexes_) {
+        idx->insert_record(record);
+     }
+  }
+  return rc;
 }
 
 RC Table::insert_chunk(const Chunk& chunk)
@@ -296,4 +307,12 @@ Index *Table::find_index_by_field(const char *field_name) const
 RC Table::sync()
 {
   return engine_->sync();
+}
+
+// 新增查找函数
+IvfflatIndex* Table::find_vector_index(const char* field_name) const {
+  for (auto idx : vector_indexes_) {
+     if (strcmp(idx->field(), field_name) == 0) return idx;
+  }
+  return nullptr;
 }

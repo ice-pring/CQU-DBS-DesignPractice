@@ -40,6 +40,14 @@ Value::Value(const Value &other)
     case AttrType::CHARS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: { // 新增
+      if (own_data_ && other.value_.pointer_value_ != nullptr && length_ != 0) {
+        this->value_.pointer_value_ = new char[this->length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -70,6 +78,14 @@ Value &Value::operator=(const Value &other)
     case AttrType::CHARS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: { // 新增
+      if (own_data_ && other.value_.pointer_value_ != nullptr && length_ != 0) {
+        this->value_.pointer_value_ = new char[this->length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -97,6 +113,7 @@ void Value::reset()
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS: // 新增
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -105,9 +122,9 @@ void Value::reset()
     default: break;
   }
 
-  attr_type_ = AttrType::UNDEFINED;
-  length_    = 0;
-  own_data_  = false;
+    attr_type_ = AttrType::UNDEFINED;
+    length_ = 0;
+    own_data_ = false;
 }
 
 void Value::set_data(char *data, int length)
@@ -115,6 +132,9 @@ void Value::set_data(char *data, int length)
   switch (attr_type_) {
     case AttrType::CHARS: {
       set_string(data, length);
+    } break;
+    case AttrType::VECTORS: { // 新增
+      set_vector(data, length);
     } break;
     case AttrType::INTS: {
       value_.int_value_ = *(int *)data;
@@ -178,6 +198,21 @@ void Value::set_string(const char *s, int len /*= 0*/)
   }
 }
 
+void Value::set_vector(const char *data, int length)
+{
+  reset();
+  attr_type_ = AttrType::VECTORS;
+  if (data == nullptr) {
+    value_.pointer_value_ = nullptr;
+    length_ = 0;
+  } else {
+    own_data_ = true;
+    value_.pointer_value_ = new char[length];
+    length_ = length;
+    memcpy(value_.pointer_value_, data, length);
+  }
+}
+
 void Value::set_empty_string(int len)
 {
   reset();
@@ -226,6 +261,9 @@ char *Value::data() const
 {
   switch (attr_type_) {
     case AttrType::CHARS: {
+      return value_.pointer_value_;
+    } break;
+    case AttrType::VECTORS: { // 新增
       return value_.pointer_value_;
     } break;
     default: {

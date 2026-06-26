@@ -36,6 +36,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/stmt.h"
 
 #include "sql/expr/expression_iterator.h"
+#include "sql/operator/sort_logical_operator.h"
 
 using namespace std;
 using namespace common;
@@ -138,7 +139,19 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     last_oper = &group_by_oper;
   }
 
+  // 新增：如果存在 order by，先将其插入树中
+  unique_ptr<LogicalOperator> sort_oper;
+  if (!select_stmt->order_by().empty()) {
+    sort_oper = make_unique<SortLogicalOperator>(std::move(select_stmt->order_by()));
+    static_cast<SortLogicalOperator*>(sort_oper.get())->set_limit(select_stmt->limit()); // 赋 limit
+    if (*last_oper) {
+      sort_oper->add_child(std::move(*last_oper));
+    }
+    last_oper = &sort_oper;
+  }
+
   unique_ptr<LogicalOperator> project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
+  static_cast<ProjectLogicalOperator*>(project_oper.get())->set_limit(select_stmt->limit()); // 赋 limit
   if (*last_oper) {
     project_oper->add_child(std::move(*last_oper));
   }

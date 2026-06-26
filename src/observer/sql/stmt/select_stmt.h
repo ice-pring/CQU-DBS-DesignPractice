@@ -44,10 +44,14 @@ public:
 
   vector<unique_ptr<Expression>> &query_expressions() { return query_expressions_; }
   vector<unique_ptr<Expression>> &group_by() { return group_by_; }
+  vector<unique_ptr<Expression>> &order_by() { return order_by_; } // 新增
+  int limit() const { return limit_; } // 新增
 
 private:
   vector<unique_ptr<Expression>> query_expressions_;
   vector<Table *>                tables_;
   FilterStmt                    *filter_stmt_ = nullptr;
   vector<unique_ptr<Expression>> group_by_;
+  vector<unique_ptr<Expression>> order_by_; // 新增
+  int limit_ = -1; // 新增
 };

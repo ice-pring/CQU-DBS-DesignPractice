@@ -15,6 +15,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include <cmath>
+#include <algorithm>
 
 using namespace std;
 
@@ -142,7 +144,23 @@ ComparisonExpr::~ComparisonExpr() {}
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
   RC  rc         = RC::SUCCESS;
+
+  if (left.attr_type() == AttrType::VECTORS || right.attr_type() == AttrType::VECTORS) {
+    if (left.attr_type() != AttrType::VECTORS || right.attr_type() != AttrType::VECTORS) {
+      LOG_WARN("VECTOR cannot be compared with other types.");
+      return RC::INVALID_ARGUMENT;
+    }
+    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
+      LOG_WARN("VECTOR only supports equality comparison.");
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
   int cmp_result = left.compare(right);
+  if (cmp_result == INT32_MAX) { // VectorType::compare 异常拦截
+    return RC::INVALID_ARGUMENT;
+  }
+
   result         = false;
   switch (comp_) {
     case EQUAL_TO: {
@@ -238,11 +256,20 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     LOG_WARN("cannot compare columns with different types");
     return RC::INTERNAL;
   }
+
+  // 新增拦截
+  if (left_column.attr_type() == AttrType::VECTORS) {
+    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
+      LOG_WARN("VECTOR only supports equality comparison.");
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
   if (left_column.attr_type() == AttrType::INTS) {
     rc = compare_column<int>(left_column, right_column, select);
   } else if (left_column.attr_type() == AttrType::FLOATS) {
     rc = compare_column<float>(left_column, right_column, select);
-  } else if (left_column.attr_type() == AttrType::CHARS) {
+  } else if (left_column.attr_type() == AttrType::CHARS || left_column.attr_type() == AttrType::VECTORS) {
     int rows = 0;
     if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
       rows = right_column.count();
@@ -627,4 +654,145 @@ RC AggregateExpr::type_from_string(const char *type_str, AggregateExpr::Type &ty
     rc = RC::INVALID_ARGUMENT;
   }
   return rc;
+}
+
+// 新增：FunctionExpr Implementations
+FunctionExpr::FunctionExpr(FuncType func_type, vector<unique_ptr<Expression>> children)
+    : func_type_(func_type), children_(std::move(children))
+{}
+
+unique_ptr<Expression> FunctionExpr::copy() const
+{
+  vector<unique_ptr<Expression>> children_copy;
+  for (auto &child : children_) {
+    children_copy.emplace_back(child->copy());
+  }
+  auto expr = make_unique<FunctionExpr>(func_type_, std::move(children_copy));
+  expr->set_name(name());
+  return expr;
+}
+
+bool FunctionExpr::equal(const Expression &other) const
+{
+  if (this == &other) return true;
+  if (other.type() != ExprType::FUNCTION) return false;
+  const auto &other_func = static_cast<const FunctionExpr &>(other);
+  if (func_type_ != other_func.func_type() || children_.size() != other_func.children_.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < children_.size(); ++i) {
+    if (!children_[i]->equal(*other_func.children_[i])) return false;
+  }
+  return true;
+}
+
+AttrType FunctionExpr::value_type() const
+{
+  return func_type_ == FuncType::VECTOR_TO_STRING ? AttrType::CHARS : AttrType::FLOATS;
+}
+
+RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (func_type_ == FuncType::VECTOR_TO_STRING) {
+    Value vec;
+    RC rc = children_[0]->get_value(tuple, vec);
+    if (rc != RC::SUCCESS) return rc;
+    return calc_vector_to_string(vec, value);
+  } else if (func_type_ == FuncType::DISTANCE) {
+    Value vec1, vec2, method;
+    RC rc = children_[0]->get_value(tuple, vec1);
+    if (rc != RC::SUCCESS) return rc;
+    rc = children_[1]->get_value(tuple, vec2);
+    if (rc != RC::SUCCESS) return rc;
+    rc = children_[2]->get_value(tuple, method);
+    if (rc != RC::SUCCESS) return rc;
+    return calc_distance(vec1, vec2, method, value);
+  }
+  return RC::INTERNAL;
+}
+
+RC FunctionExpr::try_get_value(Value &value) const
+{
+  if (func_type_ == FuncType::VECTOR_TO_STRING) {
+    Value vec;
+    RC rc = children_[0]->try_get_value(vec);
+    if (rc != RC::SUCCESS) return rc;
+    return calc_vector_to_string(vec, value);
+  } else if (func_type_ == FuncType::DISTANCE) {
+    Value vec1, vec2, method;
+    RC rc = children_[0]->try_get_value(vec1);
+    if (rc != RC::SUCCESS) return rc;
+    rc = children_[1]->try_get_value(vec2);
+    if (rc != RC::SUCCESS) return rc;
+    rc = children_[2]->try_get_value(method);
+    if (rc != RC::SUCCESS) return rc;
+    return calc_distance(vec1, vec2, method, value);
+  }
+  return RC::INTERNAL;
+}
+
+RC FunctionExpr::calc_vector_to_string(const Value &vec, Value &result) const
+{
+  if (vec.attr_type() != AttrType::VECTORS) {
+    LOG_WARN("VECTOR_TO_STRING requires a VECTOR argument.");
+    return RC::INVALID_ARGUMENT;
+  }
+  string str;
+  RC rc = DataType::type_instance(AttrType::VECTORS)->to_string(vec, str);
+  if (rc != RC::SUCCESS) return rc;
+  result.set_string(str.c_str(), str.length());
+  return RC::SUCCESS;
+}
+
+RC FunctionExpr::calc_distance(const Value &vec1, const Value &vec2, const Value &method, Value &result) const
+{
+  if (vec1.attr_type() != AttrType::VECTORS || vec2.attr_type() != AttrType::VECTORS) {
+    LOG_WARN("DISTANCE requires first two arguments to be VECTORs.");
+    return RC::INVALID_ARGUMENT;
+  }
+  if (vec1.length() != vec2.length() || vec1.length() == 0) {
+    LOG_WARN("DISTANCE requires vectors of the same non-zero dimension.");
+    return RC::INVALID_ARGUMENT; // 维度不匹配防御
+  }
+  if (method.attr_type() != AttrType::CHARS) {
+    LOG_WARN("DISTANCE method must be a string.");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  string m = method.get_string();
+  std::transform(m.begin(), m.end(), m.begin(), ::toupper);
+
+  int dim = vec1.length() / sizeof(float);
+  const float *v1 = (const float *)vec1.data();
+  const float *v2 = (const float *)vec2.data();
+  float dist = 0.0f;
+
+  if (m == "EUCLIDEAN" || m == "L2_DISTANCE") {
+    for (int i = 0; i < dim; ++i) {
+      float diff = v1[i] - v2[i];
+      dist += diff * diff;
+    }
+  } else if (m == "DOT" || m == "INNER_PRODUCT") {
+    for (int i = 0; i < dim; ++i) {
+      dist += v1[i] * v2[i];
+    }
+  } else if (m == "COSINE" || m == "COSINE_DISTANCE") {
+    float dot = 0.0f, norm1 = 0.0f, norm2 = 0.0f;
+    for (int i = 0; i < dim; ++i) {
+      dot += v1[i] * v2[i];
+      norm1 += v1[i] * v1[i];
+      norm2 += v2[i] * v2[i];
+    }
+    if (norm1 < 1e-6 || norm2 < 1e-6) {
+      dist = 0.0f; 
+    } else {
+      dist = dot / (std::sqrt(norm1) * std::sqrt(norm2));
+    }
+  } else {
+    LOG_WARN("Unsupported distance method: %s", method.get_string().c_str());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  result.set_float(dist);
+  return RC::SUCCESS;
 }

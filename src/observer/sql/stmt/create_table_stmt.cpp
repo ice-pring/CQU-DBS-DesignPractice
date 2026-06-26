@@ -19,6 +19,20 @@ See the Mulan PSL v2 for more details. */
 
 RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt *&stmt)
 {
+    if (nullptr == db) {
+        LOG_WARN("invalid argument. db is null");
+        return RC::INVALID_ARGUMENT;
+    }
+  for (const auto &attr : create_table.attr_infos) {
+    if (attr.type == AttrType::VECTORS) {
+      int dim = attr.length / 4;
+      if (dim <= 0 || dim > 16383) {
+        LOG_WARN("invalid vector dimension: %d", dim);
+        return RC::INVALID_ARGUMENT;
+      }
+    }
+  }
+
   StorageFormat storage_format = get_storage_format(create_table.storage_format.c_str());
   if (storage_format == StorageFormat::UNKNOWN_FORMAT) {
     return RC::INVALID_ARGUMENT;

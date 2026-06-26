@@ -66,10 +66,15 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   ExpressionBinder expression_binder(binder_context);
   
   for (unique_ptr<Expression> &expression : select_sql.expressions) {
+    size_t prev_size = bound_expressions.size();
     RC rc = expression_binder.bind_expression(expression, bound_expressions);
     if (OB_FAIL(rc)) {
       LOG_INFO("bind expression failed. rc=%s", strrc(rc));
       return rc;
+    }
+    // 如果 AS 赋予了自定义列名，则将其指针记录在案，以供后续 order by 使用
+    if (bound_expressions.size() == prev_size + 1) {
+      binder_context.add_alias(bound_expressions.back()->name(), bound_expressions.back().get());
     }
   }
 
@@ -81,6 +86,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       return rc;
     }
   }
+
+  binder_context.set_in_order_by(true);
+  vector<unique_ptr<Expression>> order_by_expressions;
+  for (unique_ptr<Expression> &expression : select_sql.order_by) {
+    RC rc = expression_binder.bind_expression(expression, order_by_expressions);
+    if (OB_FAIL(rc)) {
+      LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
+      return rc;
+    }
+  }
+  binder_context.set_in_order_by(false);
 
   Table *default_table = nullptr;
   if (tables.size() == 1) {
@@ -107,6 +123,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->query_expressions_.swap(bound_expressions);
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
-  stmt                      = select_stmt;
+  select_stmt->order_by_.swap(order_by_expressions); 
+  select_stmt->limit_ = select_sql.limit; 
+  stmt = select_stmt;
+  
   return RC::SUCCESS;
 }

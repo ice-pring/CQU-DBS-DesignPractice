@@ -92,6 +92,8 @@ struct SelectSqlNode
   vector<string>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
+  vector<unique_ptr<Expression>> order_by;     ///< 新增：order by clause
+  int limit = -1; // 新增：limit clause
 };
 
 /**
@@ -192,6 +194,10 @@ struct CreateIndexSqlNode
   string index_name;      ///< Index name
   string relation_name;   ///< Relation name
   string attribute_name;  ///< Attribute name
+  // 新增向量超参数
+  bool is_vector = false;
+  int lists = 245;
+  int probes = 5;
 };
 
 /**

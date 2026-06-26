@@ -53,6 +53,9 @@ enum class PhysicalOperatorType
   GROUP_BY_VEC,
   AGGREGATE_VEC,
   EXPR_VEC,
+  SORT, // 新增
+  LIMIT, // 新增
+  VECTOR_INDEX_SCAN, // 新增
 };
 
 /**

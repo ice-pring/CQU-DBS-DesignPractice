@@ -31,6 +31,7 @@ class ChunkFileScanner;
 class ConditionFilter;
 class DefaultConditionFilter;
 class Index;
+class IvfflatIndex; // 新增前置声明
 class IndexScanner;
 class RecordDeleter;
 class Trx;
@@ -121,6 +122,11 @@ public:
 
   RC sync();
 
+  // 新增挂载接口：
+  void add_vector_index(IvfflatIndex *idx) { vector_indexes_.push_back(idx); }
+  IvfflatIndex* find_vector_index(const char* field_name) const;
+
+
 private:
   RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field);
 
@@ -139,4 +145,5 @@ private:
   // vector<Index *>    indexes_;
   unique_ptr<TableEngine> engine_      = nullptr;
   LobFileHandler         *lob_handler_ = nullptr;
+  std::vector<IvfflatIndex *> vector_indexes_; // 新增：向量索引列表
 };
