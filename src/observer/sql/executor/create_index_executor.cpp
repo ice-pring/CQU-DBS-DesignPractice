@@ -13,12 +13,14 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/executor/create_index_executor.h"
+#include "storage/index/ivfflat_index.h"
 #include "common/log/log.h"
 #include "event/session_event.h"
 #include "event/sql_event.h"
 #include "session/session.h"
 #include "sql/stmt/create_index_stmt.h"
 #include "storage/table/table.h"
+
 
 RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
 {
@@ -32,5 +34,19 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
 
   Trx   *trx   = session->current_trx();
   Table *table = create_index_stmt->table();
+
+  // 新增分支：构建 IVF_Flat 近似索引
+  if (create_index_stmt->is_vector()) {
+     if (create_index_stmt->lists() <= 0) return RC::INVALID_ARGUMENT;
+     IvfflatIndex *vec_idx = new IvfflatIndex(create_index_stmt->lists(), create_index_stmt->probes());
+     RC rc = vec_idx->create(table, create_index_stmt->field_meta(), create_index_stmt->index_name().c_str());
+     if (rc == RC::SUCCESS) {
+        table->add_vector_index(vec_idx);
+     } else {
+        delete vec_idx;
+     }
+     return rc;
+  }
+
   return table->create_index(trx, create_index_stmt->field_meta(), create_index_stmt->index_name().c_str());
 }

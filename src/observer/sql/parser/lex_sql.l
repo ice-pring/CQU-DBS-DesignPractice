@@ -111,6 +111,15 @@ ROLLBACK                                RETURN_TOKEN(TRX_ROLLBACK);
 INT                                     RETURN_TOKEN(INT_T);
 CHAR                                    RETURN_TOKEN(STRING_T);
 FLOAT                                   RETURN_TOKEN(FLOAT_T);
+STRING_TO_VECTOR                        RETURN_TOKEN(STRING_TO_VECTOR);  // 补充 STRING_TO_VECTOR 关键字匹配
+VECTOR_TO_STRING                        RETURN_TOKEN(VECTOR_TO_STRING);  // 补充 VECTOR_TO_STRING 关键字匹配
+DISTANCE                                RETURN_TOKEN(DISTANCE);  // 补充 DISTANCE 关键字匹配
+AS                                      RETURN_TOKEN(AS); // 补充 AS 关键字匹配
+ORDER                                   RETURN_TOKEN(ORDER); // 补充 ORDER 关键字匹配
+LIMIT                                   RETURN_TOKEN(LIMIT);  //补充 LIMIT 关键字匹配
+WITH                                    RETURN_TOKEN(WITH); //补充 WITH 关键字匹配
+LISTS                                   RETURN_TOKEN(LISTS); //补充 LISTS 关键字匹配
+PROBES                                  RETURN_TOKEN(PROBES); //补充 PROBES 关键字匹配
 VECTOR                                  RETURN_TOKEN(VECTOR_T);
 LOAD                                    RETURN_TOKEN(LOAD);
 DATA                                    RETURN_TOKEN(DATA);

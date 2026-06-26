@@ -63,6 +63,17 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       rc = callback(aggregate_expr.child());
     } break;
 
+    // 新增：FunctionExpr
+    case ExprType::FUNCTION: {
+        auto& function_expr = static_cast<FunctionExpr&>(expr);
+        for (auto& child : function_expr.children()) {
+            rc = callback(child);
+            if (OB_FAIL(rc)) {
+                break;
+            }
+        }
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:

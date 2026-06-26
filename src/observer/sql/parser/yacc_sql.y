@@ -11,6 +11,9 @@
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
 #include "sql/expr/expression.h"
+// 新增头文件
+#include "sql/expr/expression.h"
+#include "common/type/vector_type.h"
 
 using namespace std;
 
@@ -117,6 +120,16 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         LE
         GE
         NE
+        // 新增
+        STRING_TO_VECTOR
+        VECTOR_TO_STRING
+        DISTANCE
+        AS
+        ORDER
+        LIMIT
+        WITH
+        LISTS
+        PROBES
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -137,6 +150,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   char *                                     cstring;
   int                                        number;
   float                                      floats;
+  std::vector<int> *                         number_list;
 }
 
 %destructor { delete $$; } <condition>
@@ -204,6 +218,12 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <sql_node>            command_wrapper
 // commands should be a list but I use a single command instead
 %type <sql_node>            commands
+// 新增
+%type <expression>          select_expr
+%type <expression_list>     select_expr_list
+%type <expression_list>     order_by
+%type <number>              opt_limit
+%type <number_list>         opt_with_clause
 
 %left '+' '-'
 %left '*' '/'
@@ -311,6 +331,23 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.relation_name = $5;
       create_index.attribute_name = $7;
     }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE opt_with_clause
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.is_vector = true;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_name = $8;
+      if ($10 != nullptr) {
+         create_index.lists = (*$10)[0];
+         create_index.probes = (*$10)[1];
+         delete $10;
+      } else {
+         create_index.lists = 245;  // 默认值
+         create_index.probes = 5;
+      }
+    }
     ;
 
 drop_index_stmt:      /*drop index 语句的语法解析树*/
@@ -363,16 +400,25 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = $4;
+      if ($$->type == AttrType::VECTORS) {
+        $$->length = $4 * 4;  // 转换为字节长度
+      } else {
+        $$->length = $4;
+      }
     }
     | ID type
     {
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = 4;
+      if ($$->type == AttrType::VECTORS) {
+        $$->length = 2048 * 4; // 默认维度2048
+      } else {
+        $$->length = 4;
+      }
     }
     ;
+
 number:
     NUMBER {$$ = $1;}
     ;
@@ -432,6 +478,7 @@ value_list:
       delete $3;
     }
     ;
+
 value:
     NUMBER {
       $$ = new Value((int)$1);
@@ -446,7 +493,20 @@ value:
       $$ = new Value(tmp);
       free(tmp);
     }
+    | STRING_TO_VECTOR LBRACE SSS RBRACE {
+      char *tmp = common::substr($3, 1, strlen($3)-2);
+      std::vector<float> vec;
+      RC rc = VectorType::string_to_vector(tmp, vec);
+      if (rc != RC::SUCCESS) {
+        yyerror(&@$, sql_string, sql_result, scanner, "failed to parse vector string");
+        free(tmp);
+        YYERROR;
+      }
+      $$ = new Value(AttrType::VECTORS, (char*)vec.data(), vec.size() * sizeof(float));
+      free(tmp);
+    }
     ;
+
 storage_format:
     /* empty */
     {
@@ -482,8 +542,9 @@ update_stmt:      /*  update 语句的语法解析树*/
       }
     }
     ;
+
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by
+    SELECT select_expr_list FROM rel_list where group_by order_by opt_limit
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -505,8 +566,53 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.group_by.swap(*$6);
         delete $6;
       }
+
+      if ($7 != nullptr) {
+        $$->selection.order_by.swap(*$7);
+        delete $7;
+      }
+      $$->selection.limit = $8;   // 新增：赋值为 LIMIT 的值（-1 表示无限制）
     }
     ;
+
+select_expr:
+    expression {
+      $$ = $1;
+    }
+    | expression AS ID {
+      $$ = $1;
+      $$->set_name($3);
+    }
+    ;
+
+select_expr_list:
+    select_expr
+    {
+      $$ = new vector<unique_ptr<Expression>>;
+      $$->emplace_back($1);
+    }
+    | select_expr COMMA select_expr_list
+    {
+      if ($3 != nullptr) {
+        $$ = $3;
+      } else {
+        $$ = new vector<unique_ptr<Expression>>;
+      }
+      $$->emplace($$->begin(), $1);
+    }
+    ;
+
+order_by:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | ORDER BY expression_list
+    {
+      $$ = $3;
+    }
+    ;
+
 calc_stmt:
     CALC expression_list
     {
@@ -568,6 +674,20 @@ expression:
     }
     | aggregate_expression {
       $$ = $1;
+    }
+    | VECTOR_TO_STRING LBRACE expression RBRACE {
+      std::vector<std::unique_ptr<Expression>> children;
+      children.emplace_back(std::unique_ptr<Expression>($3));
+      $$ = new FunctionExpr(FunctionExpr::FuncType::VECTOR_TO_STRING, std::move(children));
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | DISTANCE LBRACE expression COMMA expression COMMA expression RBRACE {
+      std::vector<std::unique_ptr<Expression>> children;
+      children.emplace_back(std::unique_ptr<Expression>($3));
+      children.emplace_back(std::unique_ptr<Expression>($5));
+      children.emplace_back(std::unique_ptr<Expression>($7));
+      $$ = new FunctionExpr(FunctionExpr::FuncType::DISTANCE, std::move(children));
+      $$->set_name(token_name(sql_string, &@$));
     }
     ;
 
@@ -708,6 +828,20 @@ group_by:
       $$ = $3;
     }
     ;
+
+opt_limit:
+    /* empty */ { $$ = -1; }
+    | LIMIT NUMBER { $$ = $2; }
+    ;
+
+opt_with_clause:
+    /* empty */ { $$ = nullptr; }
+    | WITH LBRACE LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    {
+      $$ = new std::vector<int>{$5, $9};
+    }
+    ;
+
 load_data_stmt:
     LOAD DATA INFILE SSS INTO TABLE ID fields_terminated_by enclosed_by
     {

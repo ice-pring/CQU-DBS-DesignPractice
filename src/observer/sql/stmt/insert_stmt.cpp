@@ -47,6 +47,20 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
     return RC::SCHEMA_FIELD_MISSING;
   }
 
+  for (int i = 0; i < value_num; ++i) {
+    const FieldMeta *field = table_meta.field(i + table_meta.sys_field_num());
+    if (field->type() == AttrType::VECTORS) {
+      if (inserts.values[i].attr_type() != AttrType::VECTORS) {
+        LOG_WARN("schema mismatch. expected VECTOR for field %s", field->name());
+        return RC::INVALID_ARGUMENT;
+      }
+      if (inserts.values[i].length() != field->len()) {
+        LOG_WARN("schema mismatch. vector dimension mismatch for field %s", field->name());
+        return RC::INVALID_ARGUMENT; 
+      }
+    }
+  }
+
   // everything alright
   stmt = new InsertStmt(table, values, value_num);
   return RC::SUCCESS;

@@ -47,6 +47,7 @@ enum class ExprType
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
+  FUNCTION,     ///< 新增：普通函数调用
 };
 
 /**
@@ -527,4 +528,38 @@ public:
 private:
   Type                   aggregate_type_;
   unique_ptr<Expression> child_;
+};
+
+class FunctionExpr : public Expression
+{
+public:
+  enum class FuncType
+  {
+    VECTOR_TO_STRING,
+    DISTANCE
+  };
+
+public:
+  FunctionExpr(FuncType func_type, vector<unique_ptr<Expression>> children);
+  virtual ~FunctionExpr() = default;
+
+  unique_ptr<Expression> copy() const override;
+  bool equal(const Expression &other) const override;
+  ExprType type() const override { return ExprType::FUNCTION; }
+  AttrType value_type() const override;
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override { return RC::UNIMPLEMENTED; }
+  RC try_get_value(Value &value) const override;
+
+  FuncType func_type() const { return func_type_; }
+  vector<unique_ptr<Expression>> &children() { return children_; }
+
+private:
+  RC calc_vector_to_string(const Value &vec, Value &result) const;
+  RC calc_distance(const Value &vec1, const Value &vec2, const Value &method, Value &result) const;
+
+private:
+  FuncType func_type_;
+  vector<unique_ptr<Expression>> children_;
 };

@@ -49,53 +49,55 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     return RC::SUCCESS;
   }
 
+  string original_name = expr->name();
+  size_t prev_size = bound_expressions.size();
+  RC rc = RC::INTERNAL;
+
   switch (expr->type()) {
     case ExprType::STAR: {
-      return bind_star_expression(expr, bound_expressions);
+      rc = bind_star_expression(expr, bound_expressions);
     } break;
-
     case ExprType::UNBOUND_FIELD: {
-      return bind_unbound_field_expression(expr, bound_expressions);
+      rc = bind_unbound_field_expression(expr, bound_expressions);
     } break;
-
     case ExprType::UNBOUND_AGGREGATION: {
-      return bind_aggregate_expression(expr, bound_expressions);
+      rc = bind_aggregate_expression(expr, bound_expressions);
     } break;
-
     case ExprType::FIELD: {
-      return bind_field_expression(expr, bound_expressions);
+      rc = bind_field_expression(expr, bound_expressions);
     } break;
-
     case ExprType::VALUE: {
-      return bind_value_expression(expr, bound_expressions);
+      rc = bind_value_expression(expr, bound_expressions);
     } break;
-
     case ExprType::CAST: {
-      return bind_cast_expression(expr, bound_expressions);
+      rc = bind_cast_expression(expr, bound_expressions);
     } break;
-
     case ExprType::COMPARISON: {
-      return bind_comparison_expression(expr, bound_expressions);
+      rc = bind_comparison_expression(expr, bound_expressions);
     } break;
-
     case ExprType::CONJUNCTION: {
-      return bind_conjunction_expression(expr, bound_expressions);
+      rc = bind_conjunction_expression(expr, bound_expressions);
     } break;
-
     case ExprType::ARITHMETIC: {
-      return bind_arithmetic_expression(expr, bound_expressions);
+      rc = bind_arithmetic_expression(expr, bound_expressions);
     } break;
-
     case ExprType::AGGREGATION: {
       ASSERT(false, "shouldn't be here");
     } break;
-
+    case ExprType::FUNCTION: {
+      rc = bind_function_expression(expr, bound_expressions);
+    } break;
     default: {
       LOG_WARN("unknown expression type: %d", static_cast<int>(expr->type()));
-      return RC::INTERNAL;
+      rc = RC::INTERNAL;
     }
   }
-  return RC::INTERNAL;
+
+  // 绑定成功且生成了单一列名，恢复其在 Parser 阶段可能的 AS 命名
+  if (rc == RC::SUCCESS && bound_expressions.size() == prev_size + 1) {
+    bound_expressions.back()->set_name(original_name);
+  }
+  return rc;
 }
 
 RC ExpressionBinder::bind_star_expression(
@@ -141,6 +143,15 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
   const char *table_name = unbound_field_expr->table_name();
   const char *field_name = unbound_field_expr->field_name();
+
+  // 若处于 ORDER BY 上下文且未指定表前缀，优先匹配 SELECT 中的别名
+  if (context_.in_order_by() && is_blank(table_name)) {
+    Expression* alias_expr = context_.find_alias(field_name);
+    if (alias_expr != nullptr) {
+      bound_expressions.emplace_back(alias_expr->copy());
+      return RC::SUCCESS;
+    }
+  }
 
   Table *table = nullptr;
   if (is_blank(table_name)) {
@@ -445,5 +456,39 @@ RC ExpressionBinder::bind_aggregate_expression(
   }
 
   bound_expressions.emplace_back(std::move(aggregate_expr));
+  return RC::SUCCESS;
+}
+
+// 新增：绑定函数表达式
+RC ExpressionBinder::bind_function_expression(
+    unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
+{
+  if (nullptr == expr) {
+    return RC::SUCCESS;
+  }
+
+  auto func_expr = static_cast<FunctionExpr *>(expr.get());
+  vector<unique_ptr<Expression>> &children = func_expr->children();
+
+  for (unique_ptr<Expression> &child_expr : children) {
+    vector<unique_ptr<Expression>> child_bound_expressions;
+
+    RC rc = bind_expression(child_expr, child_bound_expressions);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+
+    if (child_bound_expressions.size() != 1) {
+      LOG_WARN("invalid children number of function expression: %d", child_bound_expressions.size());
+      return RC::INVALID_ARGUMENT;
+    }
+
+    unique_ptr<Expression> &child = child_bound_expressions[0];
+    if (child.get() != child_expr.get()) {
+      child_expr.reset(child.release());
+    }
+  }
+
+  bound_expressions.emplace_back(std::move(expr));
   return RC::SUCCESS;
 }

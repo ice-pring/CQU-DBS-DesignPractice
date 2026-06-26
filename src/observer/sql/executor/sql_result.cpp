@@ -63,10 +63,14 @@ RC SqlResult::next_tuple(Tuple *&tuple)
 {
   RC rc = operator_->next();
   if (rc != RC::SUCCESS) {
+    tuple = nullptr; // 增加防游离指针
     return rc;
   }
 
   tuple = operator_->current_tuple();
+  if (tuple == nullptr) { // 空保护，强制转换为数据流枯竭
+    return RC::RECORD_EOF;
+  }
   return rc;
 }
 

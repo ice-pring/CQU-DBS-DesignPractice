@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <unordered_map>
+
 #include "sql/expr/expression.h"
 
 class BinderContext
@@ -28,8 +30,21 @@ public:
 
   const vector<Table *> &query_tables() const { return query_tables_; }
 
+  // 新增：别名绑定与 ORDER BY 作用域状态
+  void add_alias(const string& name, Expression* expr) {
+    aliases_[name] = expr;
+  }
+  Expression* find_alias(const char* name) const {
+    auto it = aliases_.find(name);
+    return it != aliases_.end() ? it->second : nullptr;
+  }
+  void set_in_order_by(bool val) { in_order_by_ = val; }
+  bool in_order_by() const { return in_order_by_; }
+
 private:
   vector<Table *> query_tables_;
+  unordered_map<string, Expression*> aliases_; // 新增
+  bool in_order_by_ = false; // 新增
 };
 
 /**
@@ -59,6 +74,8 @@ private:
       unique_ptr<Expression> &arithmetic_expr, vector<unique_ptr<Expression>> &bound_expressions);
   RC bind_aggregate_expression(
       unique_ptr<Expression> &aggregate_expr, vector<unique_ptr<Expression>> &bound_expressions);
+  RC bind_function_expression(
+      unique_ptr<Expression> &function_expr, vector<unique_ptr<Expression>> &bound_expressions);
 
 private:
   BinderContext &context_;

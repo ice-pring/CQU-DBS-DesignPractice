@@ -1,49 +1,53 @@
-/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
-miniob is licensed under Mulan PSL v2.
-You can use this software according to the terms and conditions of the Mulan PSL v2.
-You may obtain a copy of Mulan PSL v2 at:
-         http://license.coscl.org.cn/MulanPSL2
-THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
-EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
-MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
-See the Mulan PSL v2 for more details. */
-
 #pragma once
 
 #include "storage/index/index.h"
+#include "common/value.h"
+#include "storage/table/table.h"
+#include "storage/record/record.h"
+#include <vector>
+#include <string>
 
-/**
- * @brief ivfflat 向量索引
- * @ingroup Index
- */
+struct VectorEntry {
+  std::vector<float> vec;
+  RID rid;
+};
+
+struct Centroid {
+  std::vector<float> center;
+  std::vector<VectorEntry> entries;
+};
+
 class IvfflatIndex : public Index
 {
 public:
-  IvfflatIndex(){};
-  virtual ~IvfflatIndex() noexcept {};
+  IvfflatIndex(int lists, int probes) : lists_(lists), probes_(probes) {}
+  virtual ~IvfflatIndex() noexcept = default;
 
-  RC create(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta)
-  {
-    return RC::UNIMPLEMENTED;
-  };
-  RC open(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta)
-  {
+  // 自定义初始化入口
+  RC create(Table *table, const FieldMeta *field, const char *index_name);
+  
+  // 提供给表的记录插入接口，用于增量构建聚类
+  void insert_record(Record &record);
 
-    return RC::UNIMPLEMENTED;
-  };
+  // 近似搜索查询核心入口
+  std::vector<RID> ann_search(const Value &query, int top_k);
+  
+  const char* field() const { return field_name_.c_str(); }
 
-  vector<RID> ann_search(const vector<float> &base_vector, size_t limit) { return vector<RID>(); }
-
-  RC close() { return RC::UNIMPLEMENTED; }
-
-  RC insert_entry(const char *record, const RID *rid) override { return RC::UNIMPLEMENTED; };
-  RC delete_entry(const char *record, const RID *rid) override { return RC::UNIMPLEMENTED; };
-
-  RC sync() override { return RC::UNIMPLEMENTED; };
+  RC create(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta) { return RC::SUCCESS; }
+  RC open(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta) { return RC::SUCCESS; }
+  RC close() { return RC::SUCCESS; }
+  RC insert_entry(const char *record, const RID *rid) override { return RC::SUCCESS; }
+  RC delete_entry(const char *record, const RID *rid) override { return RC::SUCCESS; }
+  RC sync() override { return RC::SUCCESS; }
+  IndexScanner *create_scanner(const char *left_key, int left_len, bool left_inclusive, const char *right_key, int right_len, bool right_inclusive) override { return nullptr; }
 
 private:
-  bool   inited_ = false;
-  Table *table_  = nullptr;
-  int    lists_  = 1;
-  int    probes_ = 1;
+  int lists_;
+  int probes_;
+  std::string field_name_;
+  std::vector<Centroid> centroids_;
+  const FieldMeta *field_meta_ = nullptr;
+  
+  float calc_l2(const std::vector<float> &v1, const std::vector<float> &v2) const;
 };

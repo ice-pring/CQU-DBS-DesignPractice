@@ -119,6 +119,7 @@ public:
   void set_string(const char *s, int len = 0);
   void set_empty_string(int len);
   void set_string_from_other(const Value &other);
+  void set_vector(const char *data, int length); // 新增声明
 
 private:
   AttrType attr_type_ = AttrType::UNDEFINED;
